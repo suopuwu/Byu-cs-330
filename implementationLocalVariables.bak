@@ -1,0 +1,188 @@
+#lang shplait
+
+def funs = []
+
+// #// to comment out a block
+
+type Exp
+| intE(n :: Int)
+| plusE(l :: Exp,
+        r :: Exp)
+| multE(l :: Exp,
+        r :: Exp)
+| idE(s :: Symbol)
+| appE(s :: Symbol,
+       arg :: Exp)
+
+type FunDef
+| fd(name :: Symbol,
+     arg :: Symbol,
+     body :: Exp)
+
+fun get_fundef(sym :: Symbol, funs :: Listof(FunDef)) :: FunDef:
+  match funs
+  | []: error(#'get_fundefs, "undefined function: " +& sym)
+  | cons(df, remaining_defs):
+      if fd.name(df) == sym
+      | df
+      | get_fundef(sym, remaining_defs)
+  
+fun subst(what :: Exp, for :: Symbol, in :: Exp):
+  match in
+  | intE(n): in
+  | idE(s): if s == for
+            | what
+            | in
+  | plusE(l, r):
+      plusE(subst(what, for, l), subst(what, for, r))
+  | multE(l, r):
+      multE(subst(what, for, l), subst(what, for, r))
+  | appE(s, arg):
+      appE(s, subst(what, for, arg))
+
+fun interp(a :: Exp, defs :: Listof(FunDef)) :: Int:
+  match a
+  | intE(n): n
+  | idE(s): error(#'interp, "free variable: " +& s)
+  | plusE(l, r): interp(l, defs) + interp(r, defs)
+  | multE(l, r): interp(l, defs) * interp(r, defs)
+  | appE(s, arg):
+      block:
+        def d = get_fundef(s, defs)
+        interp(subst(intE(interp(arg, defs)),
+                     fd.arg(d),
+                     fd.body(d)),
+               defs)
+
+module test:
+  check: interp(parse('sdl'), [])
+         ~raises "free variable"
+
+fun parse(s :: Syntax) :: Exp:
+  cond
+  | syntax_is_integer(s):
+      intE(syntax_to_integer(s))
+  | syntax_is_symbol(s):
+      idE(syntax_to_symbol(s))
+  | ~else:
+      match s
+      | '$left + $right':
+          plusE(parse(left), parse(right))
+      | '$left * $right':
+          multE(parse(left), parse(right))
+      | '$sym($arg)':
+          appE(syntax_to_symbol(sym),
+               parse(arg))
+      | '($e)':
+          parse(e)
+      | ~else:
+          error(#'parse, "invalid input: " +& s)
+
+fun parse_fundef(s :: Syntax) :: FunDef:
+  match s
+  | 'fun $name($arg): $body':
+      fd(syntax_to_symbol(name),
+         syntax_to_symbol(arg),
+         parse(body))
+  | ~else:
+      error(#'parse, "invalid input: " +& s)
+
+def double_def = parse_fundef('fun double(x): x + x')
+def quadruple_def = parse_fundef('fun quadruple(x): double(double(x))')
+
+check: interp(parse('double(3)'), [double_def])
+       ~is 6
+
+module test:
+  check: subst(intE(8), #'x, intE(9))
+         ~is intE(9)
+  check: subst(intE(8), #'x, idE(#'x))
+         ~is intE(8)
+  check: subst(intE(8), #'x, idE(#'y))
+         ~is idE(#'y)
+  check: subst(intE(8), #'x, plusE(idE(#'x), idE(#'y)))
+         ~is plusE(intE(8), idE(#'y))
+  check: subst(intE(8), #'x, multE(idE(#'y), idE(#'x)))
+         ~is multE(idE(#'y), intE(8))
+  check: subst(intE(8), #'x, appE(#'double, idE(#'x)))
+         ~is appE(#'double, intE(8))
+
+module test:
+  check: subst(parse('8'), #'x, parse('9'))
+         ~is parse('9')
+  check: subst(parse('8'), #'x, parse('x'))
+         ~is parse('8')
+  check: subst(parse('8'), #'x, parse('y'))
+         ~is idE(#'y)
+  check: subst(parse('8'), #'x, parse('x +y'))
+         ~is plusE(parse('8'), idE(#'y))
+  check: subst(parse('8'), #'x, parse('y*x'))
+         ~is multE(idE(#'y), parse('8'))
+  check: subst(parse('8'), #'x, parse('double(x)'))
+         ~is parse('double(8)')
+
+check: get_fundef(#'double, [double_def])
+       ~is double_def
+check: get_fundef(#'double, [double_def, quadruple_def])
+       ~is double_def
+check: get_fundef(#'double, [quadruple_def, double_def])
+       ~is double_def
+check: get_fundef(#'quadruple, [quadruple_def, double_def])
+       ~is quadruple_def
+check: get_fundef(#'double, [])
+       ~raises "undefined function"
+
+
+check: parse('x')
+       ~is idE(#'x)
+check: parse('double(9)')
+       ~is appE(#'double, intE(9))  
+check: parse_fundef('fun double(x): x + x')
+       ~is fd(#'double, #'x, plusE(idE(#'x), idE(#'x)))
+check: parse_fundef('fusrgftrsytertyesrtyw')
+       ~raises "invalid input"
+       
+check: parse('2')
+       ~is intE(2)
+check: parse('1 + 2')
+       ~is plusE(intE(1), intE(2))
+check: parse('3 * 4')
+       ~is multE(intE(3), intE(4))
+check: parse('1 + 3 * 4')
+       ~is plusE(intE(1), multE(intE(3), intE(4)))
+check: parse('(1 + 3) * 4')
+       ~is multE(plusE(intE(1), intE(3)), intE(4))
+check: parse('1 2')
+       ~raises "invalid input"
+check: interp(intE(4), funs)
+       ~is 4
+check: interp(plusE(intE(4), intE(6)), funs)
+       ~is 10
+check: interp(multE(intE(10), intE(10)), funs)
+       ~is 100
+
+
+// check: parse('add1(2)')
+//        ~is add1E(intE(2))
+// check: interp(parse('add1(2)'))
+//        ~is intV(3)
+// check: parse('sub1(2)')
+//        ~is sub1E(intE(2))
+// check: interp(parse('sub1(2)'))
+//        ~is intV(1)
+// check: parse('min(4, 2)')
+//        ~is minE(intE(4), intE(2))
+// check: interp(parse('min(4, 2)'))
+//        ~is intV(2)
+// check: parse('max(4, 2)')
+//        ~is maxE(intE(4), intE(2))
+// check: interp(parse('max(4, 2)'))
+//        ~is intV(4)
+// check: parse('is_even(2)')
+//        ~is evenE(intE(2))
+// check: interp(parse('is_even(2)'))
+//        ~is boolV(#true)
+// check: parse('is_odd(2)')
+//        ~is oddE(intE(2))
+// check: interp(parse('is_odd(2)'))
+//        ~is boolV(#false)
