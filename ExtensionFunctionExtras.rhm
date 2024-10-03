@@ -185,10 +185,15 @@ fun parse(s :: Syntax) :: Exp:
                parse(rhs),
                parse(body))
       | 'let*:
-           x = 1
-           y = x + 1
-           y + x':
-           intE(0)
+           $id = $exp
+           ...
+         $body
+         ':
+           multiLetHelper(
+             syntax_to_list('[$id, ...]'),
+             syntax_to_list('[$exp, ...]'),
+             body
+           )
       | '$left + $right':
           plusE(parse(left), parse(right))
       | '$left * $right':
@@ -208,8 +213,6 @@ fun parse(s :: Syntax) :: Exp:
           error(#'parse, "invalid input: " +& s)
 
 fun multiLetHelper(ids :: Listof(Syntax), vals :: Listof(Syntax), body :: Syntax) :: Exp:
-  intE(0)
-#//
   if rest(ids) == []
   | letE(syntax_to_symbol(first(ids)),
          parse(first(vals)),
@@ -218,11 +221,11 @@ fun multiLetHelper(ids :: Listof(Syntax), vals :: Listof(Syntax), body :: Syntax
          parse(first(vals)),
          multiLetHelper(rest(ids), rest(vals), body))
 
-check: parse('let*:
-           x = 1
-           y = x + 1
-           y + x')
-       ~is intE(1)
+check: interp(parse('let*:
+                       x = 1
+                       y = x + 1
+                     y + x'), mt_env, [])
+       ~is 3
 fun parse_fundef(s :: Syntax) :: FunDef:
   match s
   | 'fun $name($arg = $val): $body':
