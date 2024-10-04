@@ -1,0 +1,311 @@
+#lang shplait
+
+def funs = []
+
+// #// to comment out a block
+
+type Exp
+| intE(n :: Int)
+| idE(s :: Symbol)
+| plusE(l :: Exp,
+        r :: Exp)
+| multE(l :: Exp,
+        r :: Exp)
+
+| appE(s :: Symbol,
+       arg :: Exp)
+| letE(n :: Symbol,
+       rhs :: Exp,
+       body :: Exp)
+| defE(s :: Symbol)
+| namedE(s :: Symbol,
+         name :: Symbol,
+         arg :: Exp)
+
+type FunDef
+| fd(name :: Symbol,
+     arg :: Symbol,
+     body :: Exp)
+| defFd(name :: Symbol,
+        arg :: Symbol,
+        body :: Exp,
+        default :: Exp)
+
+fun get_fundef(sym :: Symbol, funs :: Listof(FunDef)) :: FunDef:
+  match funs
+  | []: error(#'get_fundefs, "undefined function: " +& sym)
+  | cons(df, remaining_defs):
+      def name = match df | fd(n, a, b): n | defFd(n, a, b, d): n
+      if name == sym
+      | df
+      | get_fundef(sym, remaining_defs)
+  
+fun subst(what :: Exp, for :: Symbol, in :: Exp):
+  match in
+  | intE(n): in
+  | idE(s): if s == for
+            | what
+            | in
+  | plusE(l, r):
+      plusE(subst(what, for, l), subst(what, for, r))
+  | multE(l, r):
+      multE(subst(what, for, l), subst(what, for, r))
+  | appE(s, arg):
+      appE(s, subst(what, for, arg))
+  | namedE(s, n, arg):
+      namedE(s, n, subst(what, for, arg))
+  | defE(s):
+      defE(s)
+  | letE(n, rhs, body):
+      letE(n,
+           subst(what, for, rhs),
+           if n == for
+           | body
+           | subst(what, for, body))
+
+module test:
+  check: subst(intE(8), #'x, intE(9))
+         ~is intE(9)
+  check: subst(intE(8), #'x, defE(#'sdf))
+         ~is defE(#'sdf)
+  check: subst(intE(8), #'x, idE(#'x))
+         ~is intE(8)
+  check: subst(intE(8), #'x, idE(#'y))
+         ~is idE(#'y)
+  check: subst(intE(8), #'x, plusE(idE(#'x), idE(#'y)))
+         ~is plusE(intE(8), idE(#'y))
+  check: subst(intE(8), #'x, multE(idE(#'y), idE(#'x)))
+         ~is multE(idE(#'y), intE(8))
+  check: subst(intE(8), #'x, appE(#'double, idE(#'x)))
+         ~is appE(#'double, intE(8))
+  check: subst(intE(8), #'x, namedE(#'double, #'test, idE(#'x)))
+         ~is namedE(#'double, #'test, intE(8))
+  check: subst(intE(10), #'x, letE(#'y, idE(#'x), idE(#'x)))
+         ~is letE(#'y, intE(10), intE(10))
+  check: subst(intE(10), #'x, letE(#'x, idE(#'y), idE(#'x)))
+         ~is letE(#'x, idE(#'y), idE(#'x))
+         
+type Binding
+| bind(name :: Symbol,
+       val :: Int)
+
+type Env = Listof(Binding)
+
+def mt_env = []
+def extend_env = cons
+
+fun lookup(n :: Symbol, env :: Env) :: Int:
+  match env
+  | []: error(#'lookup, "free variable")
+  | cons(b, rst_env): cond
+                      | n == bind.name(b):
+                          bind.val(b)
+                      | ~else: lookup(n, rst_env)
+
+module test:
+  check: lookup (#'x, mt_env)
+         ~raises "free variable"
+  check: lookup(#'x, extend_env(bind(#'x, 1), mt_env) )
+         ~is 1
+  check: lookup(#'x, extend_env (bind(#'y, 1),
+                                 extend_env (bind(#'x, 2), mt_env)))
+         ~is 2
+fun interp(a :: Exp, env :: Env, defs :: Listof(FunDef)) :: Int:
+  match a
+  | intE(n): n
+  | idE(s): lookup(s, env)
+  | plusE(l, r): interp(l, env, defs) + interp(r, env, defs)
+  | multE(l, r): interp(l, env, defs) * interp(r, env, defs)
+  | appE(s, arg): appEHelper(get_fundef(s, defs), arg, env, defs)
+  | namedE(s, id, arg):
+      if id == getFunctionArgName(get_fundef(s, defs))
+      | appEHelper(get_fundef(s, defs), arg, env, defs)
+      | error(#'interp, "invalid named argument")
+  | defE(s):
+      def default = getDefault(get_fundef(s, defs), env, defs)
+      appEHelper(get_fundef(s, defs), default, env, defs)
+  | letE(n, rhs, body): interp(body,
+                               extend_env(bind(n, interp(rhs, env, defs)),
+                                          env),
+                               defs)
+                        
+fun getFunctionArgName(function :: FunDef):
+  match function
+  | fd(n, a, b): a
+  | defFd(n, a, b, d): a
+
+check: getFunctionArgName(defFd(#'name, #'arg, intE(0), intE(0)))
+       ~is #'arg
+
+fun appEHelper(function :: FunDef, a :: Exp, env :: Env, defs :: Listof(FunDef)):
+  match function:
+  | fd(name, arg, body):
+      interp(fd.body(function),
+             extend_env(bind(fd.arg(function),
+                             interp(a, env, defs)),
+                        mt_env),
+             defs)
+  | defFd(name, arg, body, default):
+      interp(defFd.body(function),
+             extend_env(bind(defFd.arg(function),
+                             interp(a, env, defs)),
+                        mt_env),
+             defs)
+module test:
+  check: interp(parse('sdl'), mt_env, [])
+         ~raises "free variable"
+  check: interp(parse('let test = 3:
+                         test + 1'), [], [])
+         ~is 4
+  check: interp(parse('let test = 2:
+                         test * 100'), [], [])
+         ~is 200
+  check: interp(parse('let test = 2:
+                         let test2 = 4:
+                           test * test2'), [], [])
+         ~is 8
+  check: interp(parse('let test = 3:
+                         test(3)'), [], [])
+         ~raises "undefined function"
+  check: interp(parse('f(x = 1)'), mt_env, [parse_fundef('fun f(x): x + 1')])
+         ~is 2
+  check: interp(parse('f(y = 1)'), mt_env, [parse_fundef('fun f(x): x + 1')])
+         ~raises "invalid named argument"
+fun parse(s :: Syntax) :: Exp:
+  cond
+  | syntax_is_integer(s):
+      intE(syntax_to_integer(s))
+  | syntax_is_symbol(s):
+      idE(syntax_to_symbol(s))
+  | ~else:
+      match s
+      | 'let $name = $rhs:
+           $body':
+          letE(syntax_to_symbol(name),
+               parse(rhs),
+               parse(body))
+      | 'let*:
+           $id = $exp
+           ...
+         $body
+         ':
+           multiLetHelper(
+             syntax_to_list('[$id, ...]'),
+             syntax_to_list('[$exp, ...]'),
+             body
+           )
+      | '$left + $right':
+          plusE(parse(left), parse(right))
+      | '$left * $right':
+          multE(parse(left), parse(right))
+      | '$sym($name = $arg)':
+          namedE(syntax_to_symbol(sym),
+                 syntax_to_symbol(name),
+                 parse(arg))
+      | '$sym($arg)':
+          appE(syntax_to_symbol(sym),
+               parse(arg))
+      | '$sym()':
+          defE(syntax_to_symbol(sym))
+      | '($e)':
+          parse(e)
+      | ~else:
+          error(#'parse, "invalid input: " +& s)
+
+fun multiLetHelper(ids :: Listof(Syntax), vals :: Listof(Syntax), body :: Syntax) :: Exp:
+  if rest(ids) == []
+  | letE(syntax_to_symbol(first(ids)),
+         parse(first(vals)),
+         parse(body))
+  | letE(syntax_to_symbol(first(ids)),
+         parse(first(vals)),
+         multiLetHelper(rest(ids), rest(vals), body))
+
+check: interp(parse('let*:
+                       x = 1
+                       y = x + 1
+                     y + x'), mt_env, [])
+       ~is 3
+fun parse_fundef(s :: Syntax) :: FunDef:
+  match s
+  | 'fun $name($arg = $val): $body':
+      defFd(syntax_to_symbol(name),
+            syntax_to_symbol(arg),
+            parse(body),
+            parse(val))
+  | 'fun $name($arg): $body':
+      fd(syntax_to_symbol(name),
+         syntax_to_symbol(arg),
+         parse(body))
+  | ~else:
+      error(#'parse, "invalid input: " +& s)
+
+fun getDefault(function :: FunDef, env :: Env, defs :: Listof(FunDef)):
+  match function
+  | fd(a, b, c): error(#'parse, "invalid number of arguments")
+  | defFd(n, a, b, d): d
+
+def double_def = parse_fundef('fun double(x): x + x')
+def quadruple_def = parse_fundef('fun quadruple(x): double(double(x))')
+def default_three = parse_fundef('fun def_three(x = 3): x')
+
+module test:
+  check: interp(parse('f()'), mt_env, [parse_fundef('fun f(x = 0): x + 1')])
+         ~is 1
+  check: interp(parse('def_three()'), mt_env, [default_three])
+         ~is 3
+  check: interp(parse('def_three(5)'), mt_env, [default_three])
+         ~is 5
+  check: interp(parse('double(3)'), mt_env, [double_def])
+         ~is 6
+  check: interp(parse('double()'), mt_env, [double_def])
+         ~raises "invalid number of arguments"
+         
+module test:
+  check: subst(parse('8'), #'x, parse('9'))
+         ~is parse('9')
+  check: subst(parse('8'), #'x, parse('x'))
+         ~is parse('8')
+  check: subst(parse('8'), #'x, parse('y'))
+         ~is idE(#'y)
+  check: subst(parse('8'), #'x, parse('x +y'))
+         ~is plusE(parse('8'), idE(#'y))
+  check: subst(parse('8'), #'x, parse('y*x'))
+         ~is multE(idE(#'y), parse('8'))
+  check: subst(parse('8'), #'x, parse('double(x)'))
+         ~is parse('double(8)')
+
+check: get_fundef(#'double, [double_def])
+       ~is double_def
+check: get_fundef(#'double, [double_def, quadruple_def])
+       ~is double_def
+check: get_fundef(#'double, [quadruple_def, double_def])
+       ~is double_def
+check: get_fundef(#'quadruple, [quadruple_def, double_def])
+       ~is quadruple_def
+check: get_fundef(#'double, [])
+       ~raises "undefined function"
+
+
+check: parse('x')
+       ~is idE(#'x)
+check: parse('double(9)')
+       ~is appE(#'double, intE(9))  
+check: parse_fundef('fun double(x): x + x')
+       ~is fd(#'double, #'x, plusE(idE(#'x), idE(#'x)))
+check: parse_fundef('fusrgftrsytertyesrtyw')
+       ~raises "invalid input"
+check: parse('2')
+       ~is intE(2)
+check: parse('1 + 2')
+       ~is plusE(intE(1), intE(2))
+check: parse('3 * 4')
+       ~is multE(intE(3), intE(4))
+check: parse('1 + 3 * 4')
+       ~is plusE(intE(1), multE(intE(3), intE(4)))
+check: parse('(1 + 3) * 4')
+       ~is multE(plusE(intE(1), intE(3)), intE(4))
+check: parse('1 2')
+       ~raises "invalid input"
+check: interp(intE(4), mt_env, funs)
+       ~is 4
