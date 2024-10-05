@@ -20,12 +20,6 @@ type Exp
 | funE(n :: Symbol,
        body :: Exp)
 
-#//
-type FunDef
-| fd(name :: Symbol,
-     arg :: Symbol,
-     body :: Exp)
-
 type Binding
 | bind(name :: Symbol,
        val :: Value)
@@ -37,15 +31,6 @@ type Value
 | closV(arg :: Symbol,
         body :: Exp,
         env :: Env)
-
-#//
-fun get_fundef(sym :: Symbol, funs :: Listof(FunDef)) :: FunDef:
-  match funs
-  | []: error(#'get_fundefs, "undefined function: " +& sym)
-  | cons(df, remaining_defs):
-      if fd.name(df) == sym
-      | df
-      | get_fundef(sym, remaining_defs)
 
 def extend_env = cons
 
@@ -116,24 +101,16 @@ fun parse(s :: Syntax) :: Exp:
       | ~else:
           error(#'parse, "invalid input: " +& s)
 
-#//
-fun parse_fundef(s :: Syntax) :: FunDef:
-  match s
-  | 'fun $name($arg): $body':
-      fd(syntax_to_symbol(name),
-         syntax_to_symbol(arg),
-         parse(body))
-  | ~else:
-      error(#'parse, "invalid input: " +& s)
-
-
-
 
 //TESTS
 def mt_env = []
 
 module test:
   //lambda
+  check: num_plus(intV(0), closV(#'symbol, intE(0), []))
+         ~raises "not a number"
+  check: interp(parse(' (fun (x): x+1)(10)'), [])
+         ~is intV(11)
   check: parse(' (fun (x): x+1)(10)')
          ~is appE (funE(#'x, plusE(idE(#'x), intE(1))),
                    intE(10))
@@ -165,29 +142,9 @@ module test:
   check: interp(parse('let test = 3:
                          test(3)'), [])
          ~raises "not a function"
-
-#//
-module test:
-  check: get_fundef(#'double, [double_def])
-         ~is double_def
-  check: get_fundef(#'double, [double_def, quadruple_def])
-         ~is double_def
-  check: get_fundef(#'double, [quadruple_def, double_def])
-         ~is double_def
-  check: get_fundef(#'quadruple, [quadruple_def, double_def])
-         ~is quadruple_def
-  check: get_fundef(#'double, [])
-         ~raises "undefined function"
-#//
-module test:
+         
   check: parse('x')
-         ~is idE(#'x)
-  check: parse('double(9)')
-         ~is appE(#'double, intE(9))  
-  check: parse_fundef('fun double(x): x + x')
-         ~is fd(#'double, #'x, plusE(idE(#'x), idE(#'x)))
-  check: parse_fundef('fusrgftrsytertyesrtyw')
-         ~raises "invalid input"
+         ~is idE(#'x) 
   check: parse('2')
          ~is intE(2)
   check: parse('1 + 2')
@@ -200,5 +157,5 @@ module test:
          ~is multE(plusE(intE(1), intE(3)), intE(4))
   check: parse('1 2')
          ~raises "invalid input"
-  check: interp(intE(4), mt_env, funs)
-         ~is 4
+  check: interp(intE(4), mt_env)
+         ~is intV(4)
