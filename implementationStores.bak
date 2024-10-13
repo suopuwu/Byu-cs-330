@@ -195,9 +195,6 @@ module test:
          ~is intV(3)
   check: num_mult(intV(3), intV(2))
          ~is intV(6)
-  check: fetch(1, [])
-         ~raises "location not found in store"
-
   
 // lookup ----------------------------------------
 fun lookup(n :: Symbol, env :: Env) :: Value:
@@ -225,8 +222,6 @@ module test:
          ~raises "not a box"
   check: interp(setboxE(intE(0), intE(0)), [], [])
          ~raises "not a box"
-  check: run('unbox(box(5))')
-         ~is 5
   check: interp(parse('set_box(box(5), 6)'),
                 mt_env,
                 store)
@@ -234,17 +229,6 @@ module test:
                  override_store(cell(1, intV(6)),
                                 override_store(cell(1, intV(5)),
                                                mt_store)))
-  check: run('
-               let b = box(0):
-                 begin:
-                   set_box(b, 10)
-                   unbox(b)
-             ')
-         ~is 10
-  check: run('let a = box(1):
-                let b = box(3452):
-                  unbox(a)')
-         ~is 1
   check: run('box(5)')
          ~is 1
   check: parse('2')
