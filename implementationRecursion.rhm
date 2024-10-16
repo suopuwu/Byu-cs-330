@@ -29,17 +29,21 @@ type Exp
         r :: Exp)
 | multE(l :: Exp,
         r :: Exp)
-| letE(n :: Symbol,
-       rhs :: Exp,
-       body :: Exp)
+| letrecE(n :: Symbol,
+          rhs :: Exp,
+          body :: Exp)
 | funE(n :: Symbol,
        body :: Exp)
 | appE(fn :: Exp,
        arg :: Exp)
+| if0E(condE :: Exp,
+       then :: Exp,
+       else :: Exp)
 
 type Binding
 | bind(name :: Symbol,
-       val :: Value)
+       val :: Boxof(Optionof(Value)))
+
 
 type Env = Listof(Binding)
 
@@ -55,11 +59,14 @@ fun parse(s :: Syntax) :: Exp:
       idE(syntax_to_symbol(s))
   | ~else:
       match s
-      | 'let $name = $rhs:
-           $body':
-          letE(syntax_to_symbol(name),
-               parse(rhs),
-               parse(body))
+      | 'letrec $n = $e1: $e2':
+          letrecE(syntax_to_symbol(n),
+                  parse(e1),
+                  parse(e2))
+      | 'if $cond_e == 0 | $e1 | $e2':
+          if0E(parse(cond_e),
+               parse(e1),
+               parse(e2))
       | '$left + $right':
           plusE(parse(left),
                 parse(right))
@@ -78,6 +85,14 @@ fun parse(s :: Syntax) :: Exp:
           error(#'parse, "invalid input: " +& s)
 
 module test:
+  check: interp(parse('letrec fac = (fun(x):
+                                       if x == 0
+                                       | 1
+                                       | x * fac(x + -1)):
+                         fac(5)'),
+                mt_env)
+         ~is intV(120)
+
   test_returns parse:
     ('2'): intE(2)
     ('x'): idE(#'x)
@@ -88,7 +103,6 @@ module test:
     ('double(9)'): appE(idE(#'double), intE(9))
     ('1 + double(9)'): plusE(intE(1), appE(idE(#'double), intE(9)))
     ('3 * (4 + 8)'): multE(intE(3), plusE(intE(4), intE(8)))
-    ('let x = 1 + 2: y'): letE(#'x, plusE(intE(1), intE(2)), idE(#'y))
   check: parse('1 2')
          ~raises "invalid input"
       
@@ -99,42 +113,46 @@ fun interp(a :: Exp, env :: Env) :: Value:
   | idE(s): lookup(s, env)
   | plusE(l, r): num_plus(interp(l, env), interp(r, env))
   | multE(l, r): num_mult(interp(l, env), interp(r, env))
-  | letE(n, rhs, body):
-      def rhs_v = interp(rhs, env)
-      interp(body,
-             extend_env(bind(n, rhs_v),
-                        env))
   | funE(n, body): closV(n, body, env)
   | appE(fn, arg):
       match interp(fn, env)
       | closV(n, body, c_env):
           interp(body,
-                 extend_env(bind(n, interp(arg, env)),
-                            c_env))
+                 let val = interp(arg, env):
+                   extend_env(bind(n, box(some(val))),
+                              c_env))
       | ~else: error(#'interp, "not a function")
+  | letrecE(name, rhs, body):
+      let b = box(none()):
+        let new_env = extend_env(bind(name, b),
+                                 env):
+          set_box(b, some(interp(rhs, new_env)))
+          interp(body, new_env)
+  | if0E(tst, thn, els):
+      match interp(tst, env)
+      | intV(n): if n == 0
+                 | interp(thn, env)
+                 | interp(els, env)
+      | ~else:
+          error(#'interp, "not a number")
+      
 
 module test:
+  check: interp(if0E(parse('fun (x): x + x'), intE(1), intE(1)), [])
+         ~raises "not a number"
   test_returns interp:
     (parse('2'), mt_env): intV(2)
-    (parse('x'), extend_env(bind(#'x, intV(9)), mt_env)): intV(9)
+    (parse('x'), extend_env(bind(#'x, box(some(intV(9)))), mt_env)): intV(9)
     (parse('2 + 1'), mt_env): intV(3)
     (parse('2 * 1'), mt_env): intV(2)
     (parse('(2 * 3) + (5 + 8)'), mt_env): intV(19)
     (parse('fun (x): x + x'), mt_env): closV(#'x, plusE(idE(#'x), idE(#'x)), mt_env)
-    (parse('let x = 5: x + x'), mt_env): intV(10)
-    (parse('let x = 5: let x = x + 1: x + x'), mt_env): intV(12)
-    (parse('let x = 5: let y = 6: x'), mt_env): intV(5)
     (parse('(fun (x): x + x)(8)'), mt_env): intV(16)
   
   test_errors interp:
     (parse('x'), mt_env): "free variable"
     (parse('1(2)'), mt_env): "not a function"
     (parse('1 + (fun (x): x)'), mt_env): "not a number"
-    (parse('let bad = (fun (x): x + y):
-                         let y = 5:
-                           bad(2)'),
-     mt_env): "free variable"
-
                
 // num_plus and num_mult ----------------------------------------
 fun num_op(op :: (Int, Int) -> Int, l :: Value, r :: Value) :: Value:
@@ -161,18 +179,22 @@ fun lookup(n :: Symbol, env :: Env) :: Value:
   | cons(b, rst_env):
       cond
       | n == bind.name(b):
-          bind.val(b)
+          match unbox(bind.val(b))
+          | none(): error(#'lookup, "use before initialization")
+          | some(v): v
       | ~else:
           lookup(n, rst_env)
 
 module test:
+  check: lookup(#'x, [bind(#'x, box(none()))])
+         ~raises "use before initialization"
   check: lookup(#'x, mt_env)
          ~raises "free variable"
   test_returns lookup:
-    (#'x, extend_env(bind(#'x, intV(8)), mt_env)): intV(8)
-    (#'x, extend_env(bind(#'x, intV(9)),
-                     extend_env(bind(#'x, intV(8)),
+    (#'x, extend_env(bind(#'x, box(some(intV(8)))), mt_env)): intV(8)
+    (#'x, extend_env(bind(#'x, box(some(intV(9)))),
+                     extend_env(bind(#'x, box(some(intV(8)))),
                                 mt_env))): intV(9)
-    (#'y, extend_env(bind(#'x, intV(9)),
-                     extend_env(bind(#'y, intV(8)),
+    (#'y, extend_env(bind(#'x, box(some(intV(9)))),
+                     extend_env(bind(#'y, box(some(intV(8)))),
                                 mt_env))): intV(8)

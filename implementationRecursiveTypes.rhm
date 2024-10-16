@@ -1,0 +1,703 @@
+#lang shplait
+
+type Value
+| intV(n :: Int)
+| closV(arg :: Symbol,
+        body :: Exp,
+        env :: Env)
+| variantV(tag :: Symbol,
+           val :: Value)
+| constructorV(tag :: Symbol)
+
+type Exp
+| intE(n :: Int)
+| idE(s :: Symbol)
+| plusE(l :: Exp,
+        r :: Exp)
+| multE(l :: Exp,
+        r :: Exp)
+| funE(n :: Symbol,
+       arg_type :: Type,
+       body :: Exp)
+| appE(fn :: Exp,
+       arg :: Exp)
+| if0E(check_e :: Exp, then :: Exp, else :: Exp)
+| letrecE(n :: Symbol,
+          n_type :: Type,
+          rhs :: Exp,
+          body :: Exp)
+| let_typeE(type_name :: Symbol,
+            tag1 :: Symbol,
+            type1 :: Type,
+            tag2 :: Symbol,
+            type2 :: Type,
+            body :: Exp)
+| matchE(tst :: Exp,
+         type_name :: Symbol,
+         tag1 :: Symbol,
+         n1 :: Symbol,
+         rhs1 :: Exp,
+         tag2 :: Symbol,
+         n2 :: Symbol,
+         rhs2 :: Exp)
+
+type Type
+| intT()
+| boolT()
+| arrowT(arg :: Type,
+         result :: Type)
+| definedT(name :: Symbol)
+
+type Binding
+| bind(name :: Symbol,
+       val :: Boxof(Optionof(Value)))
+
+type Env = Listof(Binding)
+
+type TypeBinding
+| tbind(name :: Symbol,
+        ty :: Type)
+| tdef(type_name :: Symbol,
+       tag1 :: Symbol,
+       type1 :: Type,
+       tag2 :: Symbol,
+       type2 :: Type)
+
+type TypeEnv = Listof(TypeBinding)
+
+def mt_env = []
+def extend_env = cons
+
+// parse ----------------------------------------
+fun parse(s :: Syntax) :: Exp:
+  cond
+  | syntax_is_integer(s):
+      intE(syntax_to_integer(s))
+  | syntax_is_symbol(s):
+      idE(syntax_to_symbol(s))
+  | ~else:
+      match s
+      | 'let $name :: $ty = $rhs:
+           $body':
+          appE(funE(syntax_to_symbol(name),
+                    parse_type(ty),
+                    parse(body)),
+               parse(rhs))
+      | 'if $cond_e == 0 | $e1 | $e2': if0E(parse(cond_e), parse(e1), parse(e2))
+      | 'letrec $name :: $ty = $rhs:
+           $body':
+          letrecE(syntax_to_symbol(name),                  
+                  parse_type(ty),
+                  parse(rhs),
+                  parse(body))
+      | 'let_type ($name
+                   | $variant1 :: $type1
+                   | $variant2 :: $type2):
+           $body':
+          let_typeE(syntax_to_symbol(name),
+                    syntax_to_symbol(variant1),
+                    parse_type(type1),
+                    syntax_to_symbol(variant2),
+                    parse_type(type2),
+                    parse(body))
+      | 'match $tst :: $type_name
+         | $variant1($arg1): $rhs1
+         | $variant2($arg2): $rhs2':
+          matchE(parse(tst),
+                 syntax_to_symbol(type_name),                 
+                 syntax_to_symbol(variant1),
+                 syntax_to_symbol(arg1),
+                 parse(rhs1),
+                 syntax_to_symbol(variant2),
+                 syntax_to_symbol(arg2),
+                 parse(rhs2))
+      | '$left + $right':
+          plusE(parse(left),
+                parse(right))
+      | '$left * $right':
+          multE(parse(left),
+                parse(right))
+      | 'fun ($id :: $ty): $body':
+          funE(syntax_to_symbol(id),
+               parse_type(ty),
+               parse(body))
+      | '$fn($arg)':
+          appE(parse(fn),
+               parse(arg))
+      | '($e)':
+          parse(e)
+      | ~else:
+          error(#'parse, "invalid input: " +& s)
+
+fun parse_type(s :: Syntax) :: Type:
+  match s
+  | 'Int': intT()
+  | 'Boolean': boolT()
+  | '$(id :: Identifier)': definedT(syntax_to_symbol(id))
+  | '$arg1 -> $arg2 -> $result':
+      // make `->` right-associative
+      parse_type('$arg1 -> ($arg2 -> $result)')
+  | '$arg -> $result':
+      arrowT(parse_type(arg), parse_type(result))
+  | '($ty)': parse_type(ty)
+  | ~else: error(#'parse_type, "invalid input: " +& s)
+
+module test:
+  check: parse('2')
+         ~is intE(2)
+  check: parse('x')
+         ~is idE(#'x)
+  check: parse('2 + 1')
+         ~is plusE(intE(2), intE (1))
+  check: parse('3 * 4')
+         ~is multE(intE(3), intE(4))
+  check: parse('3 * 4 + 8')
+         ~is plusE(multE(intE(3), intE(4)),
+                   intE(8))
+  check: parse('fun (x :: Int): 9')
+         ~is funE(#'x, intT(), intE(9))
+  check: parse('double(9)')
+         ~is appE(idE(#'double), intE(9))
+  check: parse('1 + double(9)')
+         ~is plusE(intE(1),
+                   appE(idE(#'double), intE(9)))
+  check: parse('3 * (4 + 8)')
+         ~is multE(intE(3),
+                   plusE(intE(4), intE(8)))
+  check: parse('let x :: Int = 1 + 2:
+                  y')
+         ~is appE(funE(#'x,
+                       intT(),
+                       idE(#'y)),
+                  plusE(intE(1), intE(2)))
+  check: parse('letrec x :: Int = 1 + 2:
+                  y')
+         ~is letrecE(#'x,
+                     intT(),
+                     plusE(intE(1), intE(2)),   
+                     idE(#'y))
+  check: parse('let_type (Fruit | apple :: Int
+                                | banana :: Int -> Int):
+                  1')
+         ~is let_typeE(#'Fruit,
+                       #'apple, intT(),
+                       #'banana, arrowT(intT(), intT()),
+                       intE(1))
+  check: parse('match 1 :: Fruit
+                | apple(a): 2
+                | banana(b): 3')
+         ~is matchE(intE(1),
+                    #'Fruit,
+                    #'apple, #'a, intE(2),
+                    #'banana, #'b, intE(3))
+
+  check: parse('1 2')
+         ~raises "invalid input"
+
+  check: parse_type('Int')
+         ~is intT()
+  check: parse_type('Boolean')
+         ~is boolT()
+  check: parse_type('Fruit')
+         ~is definedT(#'Fruit)
+  check: parse_type('Int -> Boolean')
+         ~is arrowT(intT(), boolT())
+  check: parse_type('Int -> (Boolean -> Int)')
+         ~is arrowT(intT(), arrowT(boolT(), intT()))
+  check: parse_type('Int -> Boolean -> Int')
+         ~is arrowT(intT(), arrowT(boolT(), intT()))
+  check: parse_type('1')
+         ~raises "invalid input"
+
+// interp ----------------------------------------
+fun interp(a :: Exp, env :: Env) :: Value:
+  match a
+  | intE(n): intV(n)
+  | idE(s): lookup(s, env)
+  | plusE(l, r): num_plus(interp(l, env), interp(r, env))
+  | multE(l, r): num_mult(interp(l, env), interp(r, env))
+  | funE(n, arg_type, body): closV(n, body, env)
+  | appE(fn, arg):
+      match interp(fn, env)
+      | closV(n, body, c_env):
+          interp(body,
+                 extend_env(bind(n, box(some(interp(arg, env)))),
+                            c_env))
+      | constructorV(tag):
+          variantV(tag, interp(arg, env))
+      | ~else: error(#'interp, "not a function")
+  | if0E(c, t, e): 
+      match interp(c, env)
+      | intV(n): 
+          if n == 0 | interp(t, env) | interp(e, env)
+      | ~else: error(#'interp, "not a number")
+  | letrecE(n, rhs_type, rhs, body):
+      def b = box(none())
+      def new_env = extend_env(bind(n, b),
+                               env)
+      set_box(b, some(interp(rhs, new_env)))
+      interp(body, new_env)
+  | let_typeE(type_name,
+              tag1, type1,
+              tag2, type2,
+              body):
+      interp(body,
+             extend_env(bind(tag1,
+                             box(some(constructorV(tag1)))),
+                        extend_env(bind(tag2,
+                                        box(some(constructorV(tag2)))),
+                                   env)))
+  | matchE(tst, ty,
+           tag1, n1, rhs1,
+           tag2, n2, rhs2):
+      match interp(tst, env)
+      | variantV(tag, val):
+          cond
+          | tag == tag1: interp(rhs1,
+                                extend_env(bind(n1, box(some(val))),
+                                           env))
+          | tag == tag2: interp(rhs2,
+                                extend_env(bind(n2, box(some(val))),
+                                           env))
+          | ~else: error(#'interp, "wrong tag")
+      | ~else: error(#'interp, "not a variant")
+
+module test:
+  check: interp(parse('2'), mt_env)
+         ~is intV(2)
+  check: interp(parse('x'), mt_env)
+         ~raises "free variable"
+  check: interp(parse('x'),
+                extend_env(bind(#'x, box(some(intV(9)))), mt_env))
+         ~is intV(9)
+  check: interp(parse('2 + 1'), mt_env)
+         ~is intV(3)
+  check: interp(parse('2 * 1'), mt_env)
+         ~is intV(2)
+  check: interp(parse('(2 * 3) + (5 + 8)'), mt_env)
+         ~is intV(19)
+  check: interp(parse('fun (x :: Int):
+                         x + x'),
+                mt_env)
+         ~is closV(#'x, plusE(idE(#'x), idE(#'x)), mt_env)
+  check: interp(parse('let x :: Int = 5: x + x'),
+                mt_env)
+         ~is intV(10)
+  check: interp(parse('let x :: Int = 5:
+                         let x :: Int = x + 1:
+                           x + x'),
+                mt_env)
+         ~is intV(12)
+  check: interp(parse('let x :: Int = 5:
+                         let y :: Int = 6:
+                           x'),
+                mt_env)
+         ~is intV(5)
+  check: interp(parse('(fun (x :: Int): x + x)(8)'),
+                mt_env)
+         ~is intV(16)
+  check: interp(parse('1(2)'), mt_env)
+         ~raises "not a function"
+  check: interp(parse('1 + (fun (x :: Int): x)'), mt_env)
+         ~raises "not a number"
+  check: interp(parse('if (fun (x :: Int): x) == 0 
+                       | 1 
+                       | 2'), mt_env)
+         ~raises "not a number"
+  check: interp(parse('let bad :: Int -> Int = (fun (x :: Int):
+                                                        x + y):
+                         let y :: Int = 5:
+                           bad(2)'),
+                mt_env)
+         ~raises "free variable"
+
+  check: interp(parse('letrec f :: Boolean = f: f'),
+                mt_env)
+         ~raises "use before initialization"
+  check: interp(parse('letrec f :: Int -> Int = (fun (x :: Int):
+                                                      x + x):
+                         f(8)'),
+                mt_env)
+         ~is intV(16)
+  check: interp(parse('letrec fact :: (Int -> Int) = (fun (n :: Int):
+                                                         if n == 0 | 1 | n * fact(n + -1)):
+                            fact(10)'),
+                mt_env)
+         ~is intV(3628800)
+
+  check: interp(parse('let_type (Fruit | apple :: Int
+                                       | banana :: Int -> Int):
+                         apple(1)'),
+                mt_env)
+         ~is variantV(#'apple, intV(1))
+  check: interp(parse('let_type (Fruit | banana :: Int -> Int
+                                       | apple :: Int):
+                         apple(1)'),
+                mt_env)
+         ~is variantV(#'apple, intV(1))
+  check: interp(parse('let_type (Fruit | apple :: Int
+                                       | banana :: Int -> Int):
+                         let f :: Fruit -> Int = (fun (f :: Fruit):
+                                                    match f :: Fruit
+                                                    | apple(a): a
+                                                    | banana(g): g(2)):
+                           f(apple(1)) + f(banana(fun (n :: Int):
+                                                    n + 3))'),
+                mt_env)
+         ~is intV(6) 
+
+  check: interp(parse('match 1 :: Fruit
+                       | apple(a): 1
+                       | banana(b): 1'),
+                mt_env)
+         ~raises "not a variant"
+  check: interp(parse('let_type (Animal | lion :: Int
+                                        | bear :: Int):
+                         match lion(1) :: Fruit
+                         | apple(a): 1
+                         | banana(b): 1'),
+                mt_env)
+         ~raises "wrong tag"
+
+               
+// num_plus and num_mult ----------------------------------------
+fun num_op(op :: (Int, Int) -> Int, l :: Value, r :: Value) :: Value:
+  cond
+  | l is_a intV && r is_a intV:
+      intV(op(intV.n(l), intV.n(r)))
+  | ~else:
+      error(#'interp, "not a number")
+fun num_plus(l :: Value, r :: Value) :: Value:
+  num_op(fun (a, b): a+b, l, r)
+fun num_mult(l :: Value, r :: Value) :: Value:
+  num_op(fun (a, b): a*b, l, r)
+
+module test:
+  check: num_plus(intV(1), intV(2))
+         ~is intV(3)
+  check: num_mult(intV(3), intV(2))
+         ~is intV(6)
+  
+// lookup ----------------------------------------
+fun make_lookup(is_variant :: ?a -> Boolean,
+                get_name :: ?a -> Symbol,
+                get_val :: ?a -> ?b):
+  fun (n :: Symbol, env :: Listof(?a)) :: ?b:
+    match env
+    | []: error(#'lookup, "free variable")
+    | cons(b, rst_env):
+        cond
+        | is_variant(b) && n == get_name(b):
+            get_val(b)
+        | ~else:
+            make_lookup(is_variant, get_name, get_val)(n, rst_env)
+
+def lookup = make_lookup(fun (b): b is_a bind,
+                         bind.name,
+                         fun (b):
+                           match unbox(bind.val(b))
+                           | none(): error(#'lookup, "use before initialization: " +& bind.name(b))
+                           | some(v): v)
+
+module test:
+  check: lookup(#'x, mt_env)
+         ~raises "free variable"
+  check: lookup(#'x, extend_env(bind(#'x, box(some(intV(8)))), mt_env))
+         ~is intV(8)
+  check: lookup(#'x, extend_env(bind(#'x, box(some(intV(9)))),
+                                extend_env(bind(#'x, box(some(intV(8)))),
+                                           mt_env)))
+         ~is intV(9)
+  check: lookup(#'y, extend_env(bind(#'x, box(some(intV(9)))),
+                                extend_env(bind(#'y, box(some(intV(8)))),
+                                           mt_env)))
+         ~is intV(8)
+  check: lookup(#'x, extend_env(bind(#'x, box(none())), mt_env))
+         ~raises "use before initialization"
+
+// typecheck ----------------------------------------
+fun typecheck(a :: Exp, tenv :: TypeEnv) :: Type:
+  match a
+  | intE(n): intT()
+  | idE(n): type_lookup(n, tenv)
+  | plusE(l, r): typecheck_nums(l, r, tenv)
+  | multE(l, r): typecheck_nums(l, r, tenv)
+  | funE(n, arg_type, body):
+      arrowT(arg_type,
+             typecheck(body,
+                       extend_env(tbind(n, arg_type),
+                                  tenv)))
+  | appE(fn, arg):
+      match typecheck(fn, tenv)
+      | arrowT(arg_type, result_type):
+          if arg_type == typecheck(arg, tenv)
+          | result_type
+          | type_error(arg, to_string(arg_type))
+      | ~else: type_error(fn, "function")
+  | if0E(check_e, then, else):
+      cond
+      | typecheck(check_e, tenv) == intT():
+          def then_tp = typecheck(then, tenv)
+          if then_tp == typecheck(else, tenv)
+          | then_tp
+          | type_error(else, to_string(then_tp))
+      | ~else: type_error(check_e, to_string(a))
+  | letrecE(n, rhs_type, rhs, body):
+      def new_tenv = extend_env(tbind(n, rhs_type),
+                                tenv)
+      if rhs_type == typecheck(rhs, new_tenv)
+      | typecheck(body, new_tenv)
+      | type_error(rhs, to_string(rhs_type))
+  | let_typeE(type_name,
+              tag1, type1,
+              tag2, type2,
+              body):
+      def new_tenv = extend_env(tdef(type_name,
+                                     tag1, type1,
+                                     tag2, type2),
+                                tenv)
+      tvarcheck(type1, new_tenv)
+      tvarcheck(type2, new_tenv)
+      typecheck(body, extend_env(tbind(tag1,
+                                       arrowT(type1, definedT(type_name))),
+                                 extend_env(tbind(tag2,
+                                                  arrowT(type2, definedT(type_name))),
+                                            new_tenv)))
+  | matchE(tst, type_name,
+           tag1, n1, rhs1,
+           tag2, n2, rhs2):
+      def defT = defined_type_lookup(type_name, tenv)
+      if(tag1 != tdef.tag1(defT)) || (tag2 != tdef.tag2(defT))
+      | type_error(a, "matching variant names")
+      | match typecheck(tst, tenv)
+        | definedT(name):
+           if name != type_name
+           | type_error(tst, to_string(type_name))
+           | block:
+               def rhs1_t = typecheck(rhs1, extend_env(tbind(n2, tdef.type1(defT)),
+                                                       tenv))
+               def rhs2_t = typecheck(rhs2, extend_env(tbind(n2, tdef.type2(defT)),
+                                                       tenv))
+               if rhs1_t == rhs2_t
+               | rhs1_t
+               | type_error(rhs2, to_string(rhs1_t))
+        | ~else: type_error(tst, to_string(type_name))
+
+
+fun typecheck_nums(l, r, tenv):
+  match typecheck(l, tenv)
+  | intT():
+      match typecheck(r, tenv)
+      | intT():
+          intT()
+      | ~else: type_error(r, "num")
+  | ~else: type_error(l, "num")
+
+fun type_error(a, msg):
+  error(#'typecheck, "no type: " +& a +& " not " +& msg)
+
+def type_lookup = make_lookup(fun (b): b is_a tbind, tbind.name, tbind.ty)
+
+def defined_type_lookup = make_lookup(fun (b): b is_a tdef,
+                                      tdef.type_name,
+                                      fun (d): d)
+
+module test:
+  check: typecheck(parse('10'), mt_env)
+         ~is intT()
+  check: typecheck(parse('10 + 17'), mt_env)
+         ~is intT()
+  check: typecheck(parse('10 * 17'), mt_env)
+         ~is intT()
+  check: typecheck(parse('fun (x :: Int): 12'), mt_env)
+         ~is arrowT(intT(), intT())
+  check: typecheck(parse('fun (x :: Int): fun (y :: Boolean): x'),
+                   mt_env)
+         ~is arrowT(intT(), arrowT(boolT(), intT()))
+
+  check: typecheck(parse('(fun (x :: Int): 12)(1 + 17)'),
+                   mt_env)
+         ~is intT()
+
+  check: typecheck(parse('let x :: Int = 4:
+                            let f :: (Int -> Int) = (fun (y :: Int):
+                                                             x + y):
+                              f(x)'),
+                   mt_env)
+         ~is intT()
+
+  check: typecheck(parse('if 0 == 0 | 1 | 2'), [])
+         ~is intT()
+        
+  check: typecheck(parse('letrec f :: Boolean = f: f'),
+                   mt_env)
+         ~is boolT()
+
+  check: typecheck(parse('letrec f :: Int -> Int = (fun (x :: Int):
+                                                      x + x):
+                            f(8)'),
+                   mt_env)
+         ~is intT()
+  
+  check: typecheck(parse('letrec fact :: (Int -> Int) = (fun (n :: Int):
+                                                           if n == 0 | 1 | n * fact(n + -1)):
+                            fact(10)'),
+                   mt_env)
+         ~is intT()
+
+
+  check: typecheck(parse('if (fun (x :: Boolean): x) == 0 | 1 | 2'), [])
+         ~raises "no type"
+  check: typecheck(parse('1(2)'),
+                   mt_env)
+         ~raises "no type"
+  check: typecheck(parse('(fun (x :: Boolean): x)(2)'),
+                   mt_env)
+         ~raises "no type"
+  check: typecheck(parse('1 + (fun (x :: Int): x)'),
+                   mt_env)
+         ~raises "no type"
+  check: typecheck(parse('(fun (x :: Int): x) * 1'),
+                   mt_env)
+         ~raises "no type"
+  check: typecheck(parse('letrec x :: Int -> Int = 5:
+                            x'),
+                   mt_env)
+         ~raises "no type"
+
+  check: typecheck(parse('if 0 == 0 | 1 | (fun (x :: Int): x)'), [])
+         ~raises "no type"
+
+  check: typecheck(parse('if (fun (x :: Int): x) == 0 | 1 | (fun (x :: Int): x)'), [])
+         ~raises "no type"
+
+  check: typecheck(parse('let_type (Fruit | apple :: Int
+                                          | banana :: Int -> Int):
+                            let a :: Fruit = apple(1):
+                              5'),
+                   mt_env)
+         ~is intT()
+  check: typecheck(parse('let_type (Fruit | banana :: Int -> Int
+                                          | apple :: Int):
+                            let a :: Fruit = apple(1):
+                              5'),
+                   mt_env)
+         ~is intT()
+         
+  check: typecheck(parse('let_type (Animal | lion :: Int
+                                           | bear :: Int):
+                            match lion(1) :: Animal
+                            | lion(a): 1
+                            | bear(b): 1'),
+                   mt_env)
+         ~is intT()
+  check: typecheck(parse('let_type (Fruit | apple :: Int
+                                          | banana :: Int -> Int):
+                            banana(1)'),
+                   mt_env)
+         ~raises "no type"
+  check: typecheck(parse('let_type (Fruit | apple :: Int
+                                          | banana :: Int -> Int):
+                            apple(fun (x :: Int): x)'),
+                   mt_env)
+         ~raises "no type"
+  check: typecheck(parse('match 1 :: Fruit
+                          | apple(a): 1
+                          | banana(b): 1'),
+                   mt_env)
+         ~raises "free variable"
+  check: typecheck(parse('let_type (Animal | lion :: Int
+                                           | bear :: Int):
+                            match 1 :: Animal
+                            | lion(a): 1
+                            | bear(b): 1'),
+                   mt_env)
+         ~raises "no type"
+  check: typecheck(parse('let_type (Animal | lion :: Int
+                                           | bear :: Int):
+                            match lion(1) :: Fruit
+                            | apple(a): 1
+                            | banana(b): 1'),
+                   mt_env)
+         ~raises "free variable"
+  check: typecheck(parse('let_type (Animal | lion :: Int
+                                           | bear :: Int):
+                            let_type (Fruit | apple :: Int
+                                            | banana :: Int -> Int):
+                              match lion(1) :: Fruit
+                              | apple(a): 1
+                              | banana(b): 1'),
+                   mt_env)
+         ~raises "no type"
+  check: typecheck(parse('let_type (Animal | lion :: Int
+                                           | bear :: Int):
+                            match lion(1) :: Animal
+                            | lion(a): 1
+                            | bear(b): bear(1)'),
+                   mt_env)
+         ~raises "no type"
+  check: typecheck(parse('let_type (Animal | lion :: Int
+                                           | bear :: Int):
+                            match lion(1) :: Animal
+                            | tiger(a): 1
+                            | bear(b): 1'),
+                   mt_env)
+         ~raises "not matching variant names"
+  
+//  ----------------------------------------
+
+fun tvarcheck(ty :: Type, tenv :: TypeEnv) :: Void:
+  match ty
+  | intT(): #void
+  | boolT() : #void
+  | arrowT(a, b):
+      tvarcheck(a, tenv)
+      tvarcheck(b, tenv)
+  | definedT(id):
+      begin:
+        defined_type_lookup(id, tenv)
+        #void
+
+module test:
+  check: tvarcheck(intT(), mt_env)
+         ~is #void  
+  check: tvarcheck(boolT(), mt_env)
+         ~is #void  
+  check: tvarcheck(arrowT(intT(), boolT()), mt_env)
+         ~is #void
+  check: tvarcheck(definedT(#'Fruit),
+                   extend_env(tdef(#'Fruit,
+                                   #'apple, intT(),
+                                   #'banana, arrowT(intT(), intT())),
+                              mt_env))
+         ~is #void
+  check: tvarcheck(definedT(#'Fruit),
+                   mt_env)
+         ~raises "free variable"
+
+// ----------------------------------------
+
+fun contains_type(find_ty, ty):
+  find_ty == ty
+    || (match ty
+        | intT(): #false
+        | boolT(): #false
+        | arrowT(a, b): contains_type(find_ty, a)
+                          || contains_type(find_ty, b)
+        | definedT(id): #false)
+
+module test:  
+  check: contains_type(definedT(#'Fruit), intT())
+         ~is #false
+  check: contains_type(definedT(#'Fruit), boolT())
+         ~is #false
+  check: contains_type(definedT(#'Fruit),
+                       arrowT(boolT(), intT()))
+         ~is #false
+  check: contains_type(definedT(#'Fruit), definedT(#'Animal))
+         ~is #false
+  check: contains_type(definedT(#'Fruit), definedT(#'Fruit))
+         ~is #true
+  check: contains_type(definedT(#'Fruit),
+                       arrowT(intT(), definedT(#'Fruit)))
+         ~is #true
