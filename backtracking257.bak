@@ -1,0 +1,19 @@
+#lang shplait
+
+//Problem 257
+
+type TreeElement
+| node(n :: Int,
+       l :: TreeElement,
+       r :: TreeElement)
+| noNode()
+
+def testRoot = node(1,
+                    node(2,
+                         noNode(),
+                         node(5,
+                              noNode(),
+                              noNode()
+                              )
+                         ),
+                    node(3, noNode(), noNode()))

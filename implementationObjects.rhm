@@ -1,0 +1,233 @@
+#lang shplait
+~untyped
+
+macro '$obj_exp . $m_id($arg_exp, ...)':
+  'find($obj_exp, #' $m_id)($arg_exp, ...)'
+
+fun find(l :: Listof(Symbol * ?a), name :: Symbol) :: ?a:
+  match l
+  | []: error(#'find, "not found: " +& name)
+  | cons(p, rst_l):
+              if name == fst(p)
+              | snd(p)
+              | find(rst_l, name)
+
+type Value = Listof(Symbol * Int)
+
+fun intV(n :: Int):
+  [values(#'apply,
+          fun (arg_val): error(#'interp, "not a function")),
+   values(#'number,
+          fun (): n)]
+
+fun closV(n :: Symbol, body :: Exp, c_env :: Env):
+  [values(#'apply, fun (arg_val):
+                     body.interp(extend_env(bind(n, arg_val),
+                                            c_env))),
+   values(#'number, fun ():
+                      error(#'interp, "not a number"))]
+
+type Env = Symbol -> Value
+type Exp = Listof(Symbol * (Env -> Value))
+
+fun intE(n :: Int):
+  [values(#'interp,
+          fun (env :: Env):
+            intV(n))]
+
+fun idE(s :: Symbol):
+  [values(#'interp,
+          fun (env :: Env):
+            env(s))]
+
+fun plusE(l :: Exp, r :: Exp):
+  [values(#'interp,
+          fun (env :: Env):
+            num_plus(l.interp(env), r.interp(env)))]
+
+fun multE(l :: Exp, r :: Exp):
+  [values(#'interp,
+          fun (env :: Env):
+            num_mult(l.interp(env), r.interp(env)))]
+
+fun funE(n :: Symbol, body :: Exp):
+  [values(#'interp,
+          fun (env :: Env):
+            closV(n, body, env))]
+
+fun appE(fn :: Exp, arg :: Exp):
+  [values(#'interp,
+          fun (env :: Env):
+            (fn.interp(env)).apply(arg.interp(env)))]
+
+type Binding
+| bind(name :: Symbol,
+       val :: Value)
+
+// parse ----------------------------------------
+fun parse(s :: Syntax) :: Exp:
+  cond
+  | syntax_is_integer(s):
+      intE(syntax_to_integer(s))
+  | syntax_is_symbol(s):
+      idE(syntax_to_symbol(s))
+  | ~else:
+      match s
+      | 'let $name = $rhs:
+           $body':
+          appE(funE(syntax_to_symbol(name),
+                    parse(body)),
+               parse(rhs))               
+      | '$left + $right':
+          plusE(parse(left),
+                parse(right))
+      | '$left * $right':
+          multE(parse(left),
+                parse(right))
+      | 'fun ($id): $body':
+          funE(syntax_to_symbol(id),
+               parse(body))
+      | '$fn($arg)':
+          appE(parse(fn),
+               parse(arg))
+      | '($e)':
+          parse(e)
+      | ~else:
+          error(#'parse, "invalid input: " +& s)
+
+#//
+module test:
+  check: parse('2')
+         ~is intE(2)
+  check: parse('x')
+         ~is idE(#'x)
+  check: parse('2 + 1')
+         ~is plusE(intE(2), intE (1))
+  check: parse('3 * 4')
+         ~is multE(intE(3), intE(4))
+  check: parse('3 * 4 + 8')
+         ~is plusE(multE(intE(3), intE(4)),
+                   intE(8))
+  check: parse('fun (x): 9')
+         ~is funE(#'x, intE(9))
+  check: parse('double(9)')
+         ~is appE(idE(#'double), intE(9))
+  check: parse('1 + double(9)')
+         ~is plusE(intE(1),
+                   appE(idE(#'double), intE(9)))
+  check: parse('3 * (4 + 8)')
+         ~is multE(intE(3),
+                   plusE(intE(4), intE(8)))
+  check: parse('let x = 1 + 2:
+                  y')
+         ~is appE(funE(#'x,
+                       idE(#'y)),
+                  plusE(intE(1), intE(2)))                  
+
+check: parse('1 2')
+       ~raises "invalid input"
+      
+// interp ----------------------------------------
+fun interp(a :: Exp, env :: Env) :: Value:
+    a.interp(env)
+
+module test:
+  check: interp(parse('2'), mt_env).number()
+         ~is 2
+  check: interp(parse('x'), mt_env).number()
+         ~raises "free variable"
+  check: interp(parse('x'),
+                extend_env(bind(#'x, intV(9)), mt_env)).number()
+         ~is 9
+  check: interp(parse('2 + 1'), mt_env).number()
+         ~is 3
+  check: interp(parse('2 * 1'), mt_env).number()
+         ~is 2
+  check: interp(parse('(2 * 3) + (5 + 8)'), mt_env).number()
+         ~is 19
+
+  check: interp(parse('let x = 5: x + x'),
+                mt_env).number()
+         ~is 10
+  check: interp(parse('let x = 5:
+                         let x = x + 1:
+                           x + x'),
+                mt_env).number()
+         ~is 12
+  check: interp(parse('let x = 5:
+                         let y = 6:
+                           x'),
+                mt_env).number()
+         ~is 5
+  check: interp(parse('(fun (x): x + x)(8)'),
+                mt_env).number()
+         ~is 16
+  check: interp(parse('1(2)'), mt_env)
+         ~raises "not a function"
+  check: interp(parse('1 + (fun (x): x)'), mt_env)
+         ~raises "not a number"
+  check: interp(parse('let bad = (fun (x): x + y):
+                         let y = 5:
+                           bad(2)'),
+                mt_env)
+         ~raises "free variable"
+
+  #//
+  time:
+    interp(parse('let x2 = (fun (n): n + n):
+                    let x4 = (fun (n): x2(x2(n))):
+                      let x16 = (fun (n): x4(x4(n))):
+                        let x256 = (fun (n): x16(x16(n))):
+                          let x65536 = (fun (n): x256(x256(n))):
+                            x65536(1)'),
+           mt_env)    
+               
+// num_plus and num_mult ----------------------------------------
+fun num_op(op :: (Int, Int) -> Int, l :: Value, r :: Value) :: Value:
+      intV(op(l.number(), r.number()))
+
+fun num_plus(l :: Value, r :: Value) :: Value:
+  num_op(fun (a, b): a+b, l, r)
+fun num_mult(l :: Value, r :: Value) :: Value:
+  num_op(fun (a, b): a*b, l, r)
+#//
+module test:
+  check: num_plus(intV(1), intV(2))
+         ~is intV(3)
+  check: num_mult(intV(3), intV(2))
+         ~is intV(6)
+
+
+def mt_env:
+    fun(n):
+        error(#'lookup, "free variable: " +& n)
+
+fun extend_env(b :: Binding, env :: Env):
+    fun (n):
+        cond
+        | n == bind.name(b):
+            bind.val(b)
+        | ~else:
+            env(n)
+  
+// lookup ----------------------------------------
+fun lookup(n :: Symbol, env :: Env) :: Value:
+  env(n)
+
+module test:
+  check: lookup(#'x, mt_env)
+         ~raises "free variable"
+  check: lookup(#'x, extend_env(bind(#'x, intV(8)), mt_env)).number()
+         ~is 8
+  check: lookup(#'x, extend_env(bind(#'x, intV(9)),
+                                extend_env(bind(#'x, intV(8)),
+                                           mt_env))).number()
+         ~is 9
+  check: lookup(#'y, extend_env(bind(#'x, intV(9)),
+                                extend_env(bind(#'y, intV(8)),
+                                           mt_env))).number()
+         ~is 8
+  check: find([values(#'a, 1)], #'a)
+         ~is 1
+  check: find([values(#'a, 1), values(#'b, 2)], #'c)
+         ~raises "not found"

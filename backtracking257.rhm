@@ -1,0 +1,35 @@
+#lang shplait
+
+//Problem 257
+
+type TreeElement
+| node(n :: Int,
+       l :: TreeElement,
+       r :: TreeElement)
+| noNode()
+
+def testRoot = node(1,
+                    node(2,
+                         noNode(),
+                         node(5,
+                              noNode(),
+                              noNode()
+                              )
+                         ),
+                    node(3, noNode(), noNode()))
+fun binaryTreePaths(root :: TreeElement):
+  map(fun (str): substring(str, 2, string_length(str)), pathsToString(root, ""))
+  
+fun pathsToString(n :: TreeElement, currentPath :: String):
+  def hasLeft = node.l(n) != noNode()
+  def hasRight = node.r(n) != noNode()
+  def path = currentPath +& "->" +& node.n(n)
+  if !hasLeft && !hasRight
+  | [path]
+  | if hasLeft && hasRight
+    | append(pathsToString(node.l(n), path),
+             pathsToString(node.r(n), path))
+    | if hasLeft
+      | pathsToString(node.l(n), path)
+      | pathsToString(node.r(n), path)
+

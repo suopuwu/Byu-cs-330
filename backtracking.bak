@@ -1,0 +1,16 @@
+#lang shplait
+
+type Time
+| time(n :: Int,
+       weight :: Int)
+
+fun getTimes(n :: Int):
+  def Hours = [8, 4, 2, 1]
+  def Mminutes = [32, 16, 8, 4, 2, 1]
+  def potentialHours = getHours(n, potentialHours)
+  potentialHours
+
+fun getHours(n :: Int, remainingHours :: Listof(Int)):
+  def hours = [first(remainingHours)]
+  append(hours, getHours(n, rest(remainingHours)))
+  

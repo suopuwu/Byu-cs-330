@@ -1,0 +1,53 @@
+#lang shplait
+
+//Problem 401
+
+type Time
+| time(h :: Int,
+       m :: Int)
+  
+fun formatMins(m):
+  if m < 10
+  | "0" +& m
+  | to_string(m)
+
+fun getTimes(n :: Int):
+  def hours = [8, 4, 2, 1]
+  def minutes = [32, 16, 8, 4, 2, 1]
+  def times = timeWrapper(n, 0, hours, minutes)
+  foldl(fun (t, prev): append(prev, [time.h(t) +& ":" +& formatMins(time.m(t))]), [], times)
+
+fun createTimes(hrs :: Listof(Int), mins :: Listof(Int)):
+  if hrs == []
+  | []
+  | append(map(fun (minute): time(first(hrs), minute), mins),
+           createTimes(rest(hrs), mins))
+
+fun timeWrapper(n, m, remainingHours, remainingMinutes):
+  if n > -1
+  | append(createTimes(getHours(0, n, remainingHours, 12),
+                       getHours(0, m, remainingMinutes, 59)),
+           timeWrapper(n - 1,
+                       m + 1,
+                       remainingHours,
+                       remainingMinutes))
+  | []
+  
+
+fun getHours(base :: Int,
+             n :: Int,
+             remaining :: Listof(Int),
+             max :: Int):
+  if remaining == []
+  | []
+  | if n == 0
+    | [0]
+    | def hour = first(remaining) + base
+      if hour > max
+      | []
+      | append(
+          if n > 1
+          | getHours(hour, n - 1, rest(remaining), max)
+          | [hour],
+          getHours(base, n, rest(remaining), max))
+  
